@@ -17,36 +17,42 @@ import {
   DataMessage,
   DefaultActiveSpeakerPolicy,
   DefaultAudioMixController,
+  DefaultBrowserBehavior,
   DefaultDeviceController,
   DefaultMeetingSession,
   DefaultModality,
-  DefaultBrowserBehavior,
+  DefaultVideoTransformDevice,
   Device,
   DeviceChangeObserver,
-  EventName,
   EventAttributes,
-  LogLevel,
+  EventName,
+  isAudioTransformDevice,
   Logger,
-  MultiLogger,
+  LogLevel,
   MeetingSession,
   MeetingSessionConfiguration,
   MeetingSessionPOSTLogger,
   MeetingSessionStatus,
   MeetingSessionStatusCode,
   MeetingSessionVideoAvailability,
+  MultiLogger,
+  NoOpVideoFrameProcessor,
   RemovableAnalyserNode,
   SimulcastLayers,
   TimeoutScheduler,
   Versioning,
+  VideoFrameProcessor,
   VideoInputDevice,
   VideoSource,
   VideoTileState,
   VoiceFocusDeviceTransformer,
   VoiceFocusPaths,
   VoiceFocusTransformDevice,
-  isAudioTransformDevice,
 } from '../../../../src/index';
 import WebRTCStatsCollector from './webrtcstatscollector/WebRTCStatsCollector';
+import EmojifyVideoFrameProcessor from './videofilter/EmojifyVideoFrameProcessor';
+import CircularCut from './videofilter/CircularCut';
+import FaceTrackingProcessor from './videofilter/FaceTrackingProcessor';
 
 class DemoTileOrganizer {
   // this is index instead of length
@@ -103,6 +109,22 @@ const VOICE_FOCUS_SPEC = {
   revisionID: VOICE_FOCUS_REVISION_ID,
   paths: VOICE_FOCUS_PATHS,
 };
+
+enum VideoFilterNameEnum {
+  EMOJIFY = 'Emojify',
+  CIRCULAR_CUT = 'CircularCut',
+  SEGMENTATION = 'Segmentation',
+  NO_OP = 'NoOp',
+}
+
+const VIDEO_FILTERS = [
+  'None', 
+  VideoFilterNameEnum.EMOJIFY, 
+  VideoFilterNameEnum.CIRCULAR_CUT, 
+  VideoFilterNameEnum.SEGMENTATION, 
+  VideoFilterNameEnum.NO_OP
+];
+
 
 class TestSound {
   constructor(
@@ -214,6 +236,7 @@ export class DemoMeetingApp implements
     'button-content-share': false,
     'button-pause-content-share': false,
     'button-video-stats': false,
+    'button-video-filter': false,
   };
 
   contentShareType: ContentShareType = ContentShareType.ScreenCapture;
@@ -541,10 +564,11 @@ export class DemoMeetingApp implements
             await this.openVideoInputFromSelection(camera, false);
             this.audioVideo.startLocalVideoTile();
           } catch (err) {
-            this.log('no video input device selected');
+            this.log(`failed to start local video tile due to ${err}`);
           }
         } else {
           this.audioVideo.stopLocalVideoTile();
+          await this.cleanUpChosenTransformDevice();
           this.hideTile(DemoTileOrganizer.MAX_TILES);
         }
       });
@@ -1374,7 +1398,38 @@ export class DemoMeetingApp implements
   async populateAllDeviceLists(): Promise<void> {
     await this.populateAudioInputList();
     await this.populateVideoInputList();
+    await this.populateVideoFilterInputList();
     await this.populateAudioOutputList();
+  }
+
+  private videoFilter: string = 'None';
+  private async populateVideoFilterInputList(): Promise<void> {
+    const genericName = 'Filter';
+    let filters: string[] = [];
+    if (this.defaultBrowserBehaviour.supportsVideoProcessing() && this.enableUnifiedPlanForChromiumBasedBrowsers) {
+      filters = VIDEO_FILTERS;
+    } else {
+      filters.push('None');
+    }
+    this.populateInMeetingDeviceList(
+      'dropdown-menu-filter',
+      genericName,
+      [],
+      filters,
+      undefined,
+      async (name: string) => {
+        this.videoFilter = name;
+        this.log(`clicking video filter ${this.videoFilter}`);
+        this.toggleButton('button-video-filter', this.videoFilter === 'None' ? 'off' : 'on');
+        if (this.isButtonOn('button-camera')) {
+          try {
+            await this.openVideoInputFromSelection(this.selectedVideoInput, false);
+          } catch (err) {
+            this.log(`failed to choose VideoTransformDevice with error: ${err}`);
+          }
+        }
+      }
+    );
   }
 
   async populateAudioInputList(): Promise<void> {
@@ -1636,13 +1691,12 @@ export class DemoMeetingApp implements
   }
 
   private selectedVideoInput: string | null = null;
-
   async openVideoInputFromSelection(selection: string | null, showPreview: boolean): Promise<void> {
     if (selection) {
       this.selectedVideoInput = selection;
     }
     this.log(`Switching to: ${this.selectedVideoInput}`);
-    const device = this.videoInputSelectionToDevice(this.selectedVideoInput);
+    const device = await this.videoInputSelectionToDevice(this.selectedVideoInput);
     if (device === null) {
       if (showPreview) {
         this.audioVideo.stopVideoPreviewForVideoInput(document.getElementById(
@@ -1744,8 +1798,8 @@ export class DemoMeetingApp implements
     return this.audioInputSelectionWithOptionalVoiceFocus(inner);
   }
 
-  private videoInputSelectionToDevice(value: string): VideoInputDevice {
-    if (this.isRecorder() || this.isBroadcaster()) {
+  private videoInputSelectionToIntrinsicDevice(value: string): Device {
+    if (this.isRecorder() || this.isBroadcaster() || value === 'None') {
       return null;
     }
 
@@ -1757,11 +1811,78 @@ export class DemoMeetingApp implements
       return DefaultDeviceController.synthesizeVideoDevice('smpte');
     }
 
-    if (value === 'None') {
-      return null;
+    return value;
+  }
+
+  private videoFilterToProcessor(videoFilter: string): VideoFrameProcessor | null {
+    this.log(`Choosing video filter ${this.videoFilter}`);
+
+    if (videoFilter === VideoFilterNameEnum.EMOJIFY) {
+      return new EmojifyVideoFrameProcessor('🚀');
     }
 
-    return value;
+    if (videoFilter === VideoFilterNameEnum.CIRCULAR_CUT) {
+      return new CircularCut();
+    }
+
+    if (videoFilter === VideoFilterNameEnum.NO_OP) {
+      return new NoOpVideoFrameProcessor();
+    }
+
+    if (videoFilter === VideoFilterNameEnum.SEGMENTATION) {
+      return new FaceTrackingProcessor();
+    }
+
+    return null;
+  }
+
+  private chosenDevice: { transformDevice: DefaultVideoTransformDevice | undefined; processor: VideoFrameProcessor;  innerDevice: Device} = {
+    transformDevice: undefined,
+    processor: undefined,
+    innerDevice: undefined
+  };
+
+  private async cleanUpChosenTransformDevice(): Promise<void> {
+    if (this.chosenDevice && this.chosenDevice.transformDevice) {
+      await this.chosenDevice.transformDevice.stop();
+    }
+    this.chosenDevice.transformDevice = null;
+    this.chosenDevice.processor = null;
+    this.chosenDevice.innerDevice = null;
+  }
+
+  private async videoInputSelectionWithOptionalFilter(intrinsicDevice: Device): Promise<VideoInputDevice> {
+    if (this.videoFilter === 'None') {
+      return intrinsicDevice;
+    }
+
+    if (this.chosenDevice.transformDevice && 
+      this.chosenDevice.processor && 
+      this.chosenDevice.processor.name() === this.videoFilter) {
+      // same processor, so just switching inner device
+      this.chosenDevice.transformDevice = this.chosenDevice.transformDevice.chooseNewInnerDevice(intrinsicDevice);
+      return this.chosenDevice.transformDevice;
+    }
+
+    const proc = this.videoFilterToProcessor(this.videoFilter);
+    // different processor
+    if (this.chosenDevice.transformDevice) {
+      await this.chosenDevice.transformDevice.stop();
+    }
+
+    const transformDevice = new DefaultVideoTransformDevice(new ConsoleLogger('Demo'), intrinsicDevice, [proc]);
+    this.chosenDevice = { transformDevice: transformDevice, processor: proc, innerDevice: intrinsicDevice};
+    return this.chosenDevice.transformDevice;
+  }
+
+  private async videoInputSelectionToDevice(
+    value: string,
+  ): Promise<VideoInputDevice> {
+    const intrinsicDevice = this.videoInputSelectionToIntrinsicDevice(value);
+    if (intrinsicDevice === null) {
+      return null;
+    }
+    return await this.videoInputSelectionWithOptionalFilter(intrinsicDevice);
   }
 
   private initContentShareDropDownItems(): void {

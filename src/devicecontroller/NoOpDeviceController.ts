@@ -9,8 +9,7 @@ import RemovableAnalyserNode from './RemovableAnalyserNode';
 import VideoInputDevice from './VideoInputDevice';
 import VideoQualitySettings from './VideoQualitySettings';
 
-export default class NoOpDeviceController
-  extends NoOpMediaStreamBroker
+export default class NoOpDeviceController extends NoOpMediaStreamBroker
   implements DeviceControllerBasedMediaStreamBroker {
   constructor(_options?: { enableWebAudio?: boolean }) {
     super();
