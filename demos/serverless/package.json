@@ -6,6 +6,10 @@
     "deploy": "node ./deploy.js"
   },
   "dependencies": {
+    "@tensorflow-models/body-pix": "^2.0.5",
+    "@tensorflow/tfjs": "^2.7.0",
+    "@tensorflow/tfjs-backend-webgl": "^2.7.0",
+    "@tensorflow/tfjs-core": "^2.7.0",
     "aws-sdk": "^2.664.0",
     "fs-extra": "^9.0.0",
     "uuid": "^8.2.0"

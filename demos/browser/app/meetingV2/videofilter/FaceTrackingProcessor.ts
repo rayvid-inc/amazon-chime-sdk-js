@@ -1,5 +1,8 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
-declare let bodyPix: any;
+import '@tensorflow/tfjs';
+import '@tensorflow/tfjs-core';
+import '@tensorflow/tfjs-backend-webgl';
+
+import * as bodyPix from '@tensorflow-models/body-pix';
 
 import { CanvasVideoFrameBuffer, VideoFrameBuffer, VideoFrameProcessor } from '../../../../../src';
 export default class FaceTrackingProcessor implements VideoFrameProcessor {
