@@ -75,6 +75,6 @@ export default class DefaultActiveSpeakerPolicy implements ActiveSpeakerPolicy {
   }
 
   prioritizeVideoSendBandwidthForActiveSpeaker(): boolean {
-    return true;
+    return false;
   }
 }
